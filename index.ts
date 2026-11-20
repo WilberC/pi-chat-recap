@@ -54,7 +54,13 @@ export default function chatRecap(pi: ExtensionAPI) {
       | { role?: string; content?: unknown }
       | undefined;
     if (message?.role !== 'assistant') return;
-    publish(log.setAssistant(assistantText(message), tsOf(message)));
+    // stopReason 'aborted' (Escape mid-stream) closes the exchange with the
+    // R1 markers; lib/exchange.mjs owns the semantics.
+    publish(
+      log.setAssistant(assistantText(message), tsOf(message), {
+        stopReason: (message as { stopReason?: unknown }).stopReason,
+      }),
+    );
   });
 
   // R1: Escape during a run cancels the exchange. agent_settled carries
