@@ -28,11 +28,11 @@ Content modes from the captured note (`My Brain/100_Projects/AI/Recap configurab
 
 - **T1** (S5, smoke): DONE — local load via `pi install ./pi-chat-recap` or one-shot `pi -e ./index.ts`; recorded in Log L4.
 - **T2** (S5, smoke): DONE — answered + aborted verified in live journal; R1 mid-stream abort defect found, fixed (Log L3).
-- **T3** (S1/S3, design+test): RED test for S1: written as dialogue, still summarized, never answered. Same for language pinning with this mode.
-- **T4** (S1/S2/S3, implement): Implement model mode: editable prompt files with R2/R3 restriction sections, loader with validation warnings on edits that break the restrictions, summary journaled as producer data.
-- **T5** (S4, implement): Configuration knobs: model id + fallback policy, max output tokens, max context chars vs max display chars, which exchanges get summarized.
-- **T6** (S2, tests): Tests: prompt edit picked up (or documented restart requirement), invalid edit produces a visible warning, limits respected.
-- **T7** (S1–S5, docs): README update: model mode, prompt file locations and format, config reference; close with live verification report.
+- **T3** (S1/S3, design+test): DONE — RED first (`lib/summary.test.mjs`) before `lib/summary.mjs` existed; R2 no-reply rule asserted as fixed producer text, R3 language pinning asserted on the request.
+- **T4** (S1/S2/S3, implement): DONE — `lib/summary.mjs` (hard no-reply rule appended to every request, template validation with warnings, per-call prompt re-read) + `index.ts` wiring at agent_settled (never mid tool-loop, awaited so exit cannot cut it).
+- **T5** (S4, implement): DONE — `lib/config.mjs`: mode, model, fallbackModels, maxOutputTokens (default 512 after live finding: a reasoning model spent 107 tokens and a 128 cap left empty output), maxContextChars vs maxDisplayChars, mode off.
+- **T6** (S2, tests): DONE — 14 offline tests (summary + config): freshness, invalid-template warning + default takeover, fallback chain, all-fail warning, limits; 33/33 green.
+- **T7** (S1–S5, docs): DONE — README documents model mode, files, config reference, journal record types. Live verification: R2 (proposal → 'El usuario propuso…', never 'Sí, perfectamente'), R3 (es), R4 (pirate prompt edit picked up: '¡Arrr! Un tripulante…'), R1 (aborted essay got no summary and no model call), S4 (truncated at maxDisplayChars=120, provider tokens in journal).
 
 ## Log
 
@@ -40,3 +40,5 @@ Content modes from the captured note (`My Brain/100_Projects/AI/Recap configurab
 - **L2** (2026-11-20): Scope answer: "primero el productor, todo lo que tenga que ver con sidecard lo veremos luego". Model mode answer: "Sí, en paralelo".
 - **L3** (2026-11-20): Live smoke verified: answered path (pending→answered, verbatim text, real timestamps) and aborted path via tmux Escape. **Defect found and fixed**: Escape mid-stream delivers message_end with empty assistant text and `stopReason: "aborted"`; producer recorded `answered` with empty text. Fix: `setAssistant(text, ts, {stopReason})` records aborted markers directly; `abort()` also recovers an answered-empty exchange (host variants without stopReason). Evidence: journal line `{"status":"aborted",...,"marker":"No response (operation aborted)"}` after fix; 18/18 tests green.
 - **L4** (2026-11-20): T1 resolved: local load = `pi install ./pi-chat-recap` (loads from resolved path without copying; deps are author's responsibility, host pkgs in peerDependencies) or one-shot `pi -e ./index.ts` (used for live smoke). Manifest `"pi":{"extensions":["./index.ts"]}` matches documented form. Global settings untouched; install command documented in README at close.
+
+- **L5** (2026-11-20): Live findings from smoke: (a) summation belongs in agent_settled, not message_end (message_end can fire mid tool-loop; -p sessions exit before floating promises resolve); (b) `modelRegistry.complete` returns block-array content, needs text-block extraction; (c) default maxOutputTokens must leave headroom for reasoning models (parked at 512); (d) user config file wins over defaults (expected). Left clean for the user: `~/.pi/agent/pi-chat-recap.json` with `nan/glm5.3-flash` kept; pirate test prompt removed (default template applies).
