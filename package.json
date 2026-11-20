@@ -1,0 +1,37 @@
+{
+  "name": "pi-chat-recap",
+  "version": "0.1.0",
+  "description": "Producer-only chat recap data for Pi: conversation exchanges with real timestamps, cancellation states and session-fixed language. Renders nothing; built to feed renderers like herdr-sidecar.",
+  "license": "MIT",
+  "type": "module",
+  "author": "WilberC",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "recap",
+    "session-log"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WilberC/pi-chat-recap.git"
+  },
+  "homepage": "https://github.com/WilberC/pi-chat-recap#readme",
+  "bugs": {
+    "url": "https://github.com/WilberC/pi-chat-recap/issues"
+  },
+  "files": [
+    "index.ts",
+    "lib",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
