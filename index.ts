@@ -21,21 +21,32 @@ export default function chatRecap(pi: ExtensionAPI) {
   };
 
   pi.on('session_start', async (_event, ctx) => {
-    journal.openSession(ctx.sessionManager?.getSessionFile?.());
+    journal.openSession(
+      ctx.sessionManager?.getSessionFile?.(),
+      ctx.sessionManager?.getSessionId?.(),
+    );
     // Replay existing exchanges so a renderer joining late has full state.
     for (const exchange of log.exchanges()) publish(exchange);
   });
   pi.on('session_shutdown', () => journal.close());
 
-  const tsOf = (event: unknown) =>
-    (event as { timestamp?: string } | undefined)?.timestamp ?? undefined;
+  const tsOf = (message: unknown) => {
+    // Message events carry no event.timestamp; the timestamp lives on the
+    // message itself (pi-ai UserMessage/AssistantMessage.timestamp: number).
+    const ts = (message as { timestamp?: unknown } | undefined)?.timestamp;
+    return typeof ts === 'number' ? new Date(ts).toISOString() : undefined;
+  };
 
   pi.on('message_start', async (event) => {
     const message = (event as { message?: unknown }).message as
       | { role?: string; content?: unknown }
       | undefined;
     if (message?.role !== 'user') return;
-    publish(log.beginUser(userText(message as { content: unknown }), tsOf(event)));
+    // Extension-authored messages (pi.sendMessage custom_message) surface as
+    // user-role model messages; they are not things the human typed, so they
+    // never begin an exchange.
+    if ((message as { customType?: string }).customType) return;
+    publish(log.beginUser(userText(message as { content: unknown }), tsOf(message)));
   });
 
   pi.on('message_end', async (event) => {
@@ -43,7 +54,7 @@ export default function chatRecap(pi: ExtensionAPI) {
       | { role?: string; content?: unknown }
       | undefined;
     if (message?.role !== 'assistant') return;
-    publish(log.setAssistant(assistantText(message), tsOf(event)));
+    publish(log.setAssistant(assistantText(message), tsOf(message)));
   });
 
   // R1: Escape during a run cancels the exchange. agent_settled carries
