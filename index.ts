@@ -117,9 +117,23 @@ export default function chatRecap(pi: ExtensionAPI) {
       | undefined;
     if (message?.role !== 'assistant') return;
     // stopReason 'aborted' (Escape mid-stream) closes the exchange with the
-    // R1 markers; lib/exchange.mjs owns the semantics.
+    // R1 markers; 'toolUse' keeps it pending (S10). lib/exchange.mjs owns
+    // the semantics; this adapter only reads the message's own fields.
+    const m = message as {
+      stopReason?: unknown;
+      usage?: { input?: unknown; output?: unknown };
+      content?: unknown;
+    };
+    const toolCalls = Array.isArray(m.content)
+      ? m.content.filter((b) => (b as { type?: string })?.type === 'toolCall').length
+      : 0;
     const exchange = log.setAssistant(assistantText(message), tsOf(message), {
-      stopReason: (message as { stopReason?: unknown }).stopReason,
+      stopReason: m.stopReason,
+      usage: m.usage,
+      toolCalls,
+      // message_end fires when the reply has finished streaming: this is
+      // the moment the answer was complete (S10 doneTs).
+      doneTs: new Date().toISOString(),
     });
     publish(exchange);
 

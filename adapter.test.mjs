@@ -66,3 +66,33 @@ test('extension-authored messages never begin an exchange (advisory 3)', async (
   assert.equal(existsSync(join(dir, 'pi-chat-recap.journal.jsonl')), false, 'no exchange record for extension-authored messages');
   rmSync(dir, { recursive: true, force: true });
 });
+
+// S10 adapter wiring, with the event shapes of the live probe: the first
+// assistant message is a toolUse with no text, the final one carries the text.
+test('S10: a tool-using turn journals the final reply with doneTs, tokens and tool calls', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'recap-s10-'));
+  const s = piStub(); const { default: ext } = await import('./index.ts'); ext(s.api);
+  const ctx = { ui: { notify() {} }, sessionManager: { getSessionFile: () => join(dir, 's.jsonl'), getSessionId: () => 'sess-s10' } };
+  await s.handlers.get('session_start')({ type: 'session_start', reason: 'startup' }, ctx);
+  await s.handlers.get('message_start')({ type: 'message_start', message: { role: 'user', content: 'run echo', timestamp: 1763718000000 } }, ctx);
+  await s.handlers.get('message_end')({ type: 'message_end', message: {
+    role: 'assistant', stopReason: 'toolUse', timestamp: 1763718000017,
+    content: [{ type: 'toolCall', name: 'bash', arguments: { command: 'echo tool-ok' } }],
+    usage: { input: 900, output: 13 } } }, ctx);
+  await s.handlers.get('message_end')({ type: 'message_end', message: {
+    role: 'assistant', stopReason: 'stop', timestamp: 1763718001000,
+    content: [{ type: 'text', text: 'It printed tool-ok.' }],
+    usage: { input: 950, output: 8 } } }, ctx);
+  const recs = readFileSync(join(dir, 'pi-chat-recap.journal.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  const ex = recs.filter((r) => r.type === 'exchange');
+  assert.ok(ex.every((r) => r.data.id === 1), 'one exchange for the whole turn');
+  assert.ok(ex.slice(0, -1).every((r) => r.data.status === 'pending'), 'tool steps stay pending');
+  const last = ex.at(-1).data;
+  assert.equal(last.status, 'answered');
+  assert.equal(last.assistant.text, 'It printed tool-ok.');
+  assert.equal(last.assistant.ts, new Date(1763718001000).toISOString());
+  assert.ok(Date.parse(last.assistant.doneTs) >= Date.parse(last.user.ts), 'doneTs is a real time after the send');
+  assert.deepEqual(last.assistant.tokens, { input: 1850, output: 21 });
+  assert.equal(last.assistant.toolCalls, 1);
+  rmSync(dir, { recursive: true, force: true });
+});

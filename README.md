@@ -53,7 +53,18 @@ Record types:
 
 - `exchange` — full exchange state after every transition (pending /
   answered / aborted). Aborted exchanges carry fixed markers and never get
-  summarized.
+  summarized. A turn that calls tools stays `pending` through its tool steps
+  and answers with the final reply. An answered `assistant` carries:
+  - `text` — the turn's final reply, verbatim.
+  - `ts` — when the final reply message started.
+  - `doneTs` — when the final reply finished. Response time is
+    `doneTs − user.ts`.
+  - `tokens` — `{input, output}` summed over the turn's assistant messages
+    as the provider reported them, or `null` when it reported none.
+  - `toolCalls` — how many tool calls the turn made.
+
+  Older lines may lack these fields; consumers show nothing for them rather
+  than inventing a value.
 - `summary` — `{exchangeId, language, text, truncated, model, tokens}` for
   each successfully summarized answered exchange. `tokens` is the
   provider-reported usage, never an estimate presented as spend.
