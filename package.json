@@ -1,6 +1,6 @@
 {
   "name": "pi-chat-recap",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Producer-only chat recap data for Pi: conversation exchanges with real timestamps, cancellation states and session-fixed language. Renders nothing; built to feed renderers like herdr-sidecar.",
   "license": "MIT",
   "type": "module",
