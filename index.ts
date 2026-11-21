@@ -198,9 +198,15 @@ export default function chatRecap(pi: ExtensionAPI) {
     // user-role model messages; they are not things the human typed, so they
     // never begin an exchange.
     if ((message as { customType?: string }).customType) return;
-    // F6: the pending transition stays in memory; journaling it would mean
-    // re-appending the full exchange text on every tool step of the turn.
-    log.beginUser(userText(message as { content: unknown }), tsOf(message));
+    // F6: the pending transition stays in memory; journaling it on every tool
+    // step would mean re-appending the full exchange text once per step of
+    // the turn.
+    // S17 (user, 2026-11-22: "los que yo mando deben actualizarse ni bien yo
+    // lo mando"): the own message is journaled exactly once, the moment it is
+    // sent, so the renderer shows it immediately while pi is still working.
+    // The resolving write below (answered or aborted) supersedes it through
+    // the renderer's last-record-per-id fold; the same id keeps one exchange.
+    publish(log.beginUser(userText(message as { content: unknown }), tsOf(message)));
   });
 
   pi.on('message_end', async (event) => {
@@ -252,10 +258,9 @@ export default function chatRecap(pi: ExtensionAPI) {
       publish(log.abort(tsOf(event)));
       return;
     }
-    // F6: a turn that settles without a final reply still leaves its exchange
-    // in the journal — one append, never one per tool step.
-    const open = lastExchangeCompat(log);
-    if (open?.status === EXCHANGE_STATUS.pending) publish(open);
+    // The send-time pending record already covers an unresolved turn (F6+S17):
+    // the exchange was journaled the moment its own message was sent, so the
+    // settled-turn path adds nothing new — only a resolving write does.
     // F7: targeted lookup — agent_settled needs one record, not a deep clone
     // of the whole conversation on every settled turn.
     const exchange = lastExchangeCompat(log, (e) => e.status === EXCHANGE_STATUS.answered);

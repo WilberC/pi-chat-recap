@@ -19,11 +19,14 @@ absent — never reconstruct conversation semantics.
 
 ## Record types
 
-- `exchange` — the exchange's resolved state, written once when the exchange
-  resolves (answered / aborted) or when the turn settles without a final reply
-  (then it lands as `pending`). Aborted exchanges carry fixed markers and never
-  get summarized. A turn that calls tools journals only its final form — no
-  separate record per tool step. An answered `assistant` carries:
+- `exchange` — written twice for one exchange, same `id`: once as `pending` the
+  moment the own message is sent (so renderers show it immediately), then again
+  in its resolved state (answered / aborted). Consumers fold by id, so the
+  send-time record is superseded by the final one. A turn that settles without
+  a final reply keeps its send-time `pending` record as the final form; the
+  settled-turn path appends nothing new. Aborted exchanges carry fixed markers
+  and never get summarized. A turn that calls tools journals only its final
+  form — no separate record per tool step. An answered `assistant` carries:
   - `text` — the turn's final reply, verbatim.
   - `ts` — when the final reply message started.
   - `doneTs` — when the final reply finished. Response time is

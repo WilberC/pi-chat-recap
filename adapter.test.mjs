@@ -53,10 +53,18 @@ test('message timestamps come from message.timestamp, not event.timestamp', asyn
   const ctx = { ui: { notify() {} }, sessionManager: { getSessionFile: () => join(dir, 's.jsonl') } };
   await s.handlers.get('session_start')({ type: 'session_start', reason: 'startup' }, ctx);
   await s.handlers.get('message_start')({ type: 'message_start', message: { role: 'user', content: 'hi', timestamp: 1763000000000 }, event: { timestamp: 1763999999999 } }, ctx);
-  // F6: the exchange is journaled when it resolves, not on the pending
-  // transition; the assertion below still pins the timestamp source.
+  // The own message is journaled the moment it is sent (user, 2026-11-22:
+  // "los que yo mando deben actualizarse ni bien yo lo mando"); the pending
+  // record carries the user text and the renderer shows it immediately. The
+  // assertion below still pins the timestamp source.
+  const sentRecs = readFileSync(join(dir, 's.pi-chat-recap.journal.jsonl'), 'utf8')
+    .trim().split('\n').map(JSON.parse).filter((r) => r.type === 'exchange');
+  assert.equal(sentRecs.length, 1, 'the own message is journaled as soon as it is sent');
+  assert.equal(sentRecs[0].data.status, 'pending');
   await s.handlers.get('message_end')({ type: 'message_end', message: { role: 'assistant', content: 'hola', stopReason: 'stop' }, event: { timestamp: 1763999999999 } }, ctx);
-  const rec = JSON.parse(readFileSync(join(dir, 's.pi-chat-recap.journal.jsonl'), 'utf8').trim());
+  const rec = readFileSync(join(dir, 's.pi-chat-recap.journal.jsonl'), 'utf8').trim().split('\n')
+    .map(JSON.parse).find((r) => r.type === 'exchange');
+  assert.equal(rec.data.id, 1, 'both records fold onto one exchange id');
   assert.equal(rec.data.user.ts, new Date(1763000000000).toISOString());
   rmSync(dir, { recursive: true, force: true });
 });
@@ -86,27 +94,31 @@ test('S10/F6: a tool-using turn journals exactly one exchange record, its final 
     : []);
   await s.handlers.get('session_start')({ type: 'session_start', reason: 'startup' }, ctx);
   await s.handlers.get('message_start')({ type: 'message_start', message: { role: 'user', content: 'run echo', timestamp: 1763718000000 } }, ctx);
-  // Nothing is journaled while the exchange is still pending (F6 tradeoff:
-  // a Pi crash mid-turn loses the pending text; this is a recap, not a
-  // source of truth).
-  assert.equal(exchangeRecords().length, 0, 'the pending exchange is not journaled before it resolves');
+  // The own message is journaled the moment it is sent (user, 2026-11-22:
+  // "los que yo mando deben actualizarse ni bien yo lo mando"): one pending
+  // record at send time, never re-appended while the turn runs. The resolving
+  // write supersedes it through the renderer's last-record-per-id fold.
+  assert.equal(exchangeRecords().length, 1, 'the own message is journaled as soon as it is sent');
+  assert.equal(exchangeRecords()[0].data.status, 'pending', 'the send-time record is pending');
+  assert.equal(exchangeRecords()[0].data.user.text, 'run echo');
   await s.handlers.get('message_end')({ type: 'message_end', message: {
     role: 'assistant', stopReason: 'toolUse', timestamp: 1763718000017,
     content: [{ type: 'toolCall', name: 'bash', arguments: { command: 'echo tool-ok' } }],
     usage: { input: 900, output: 13 } } }, ctx);
-  assert.equal(exchangeRecords().length, 0, 'a tool step never re-appends the pending record');
+  assert.equal(exchangeRecords().length, 1, 'a tool step never re-appends the pending record');
   await s.handlers.get('message_end')({ type: 'message_end', message: {
     role: 'assistant', stopReason: 'toolUse', timestamp: 1763718000500,
     content: [{ type: 'toolCall', name: 'bash', arguments: { command: 'echo tool-ok-2' } }],
     usage: { input: 40, output: 4 } } }, ctx);
-  assert.equal(exchangeRecords().length, 0, 'a second tool step still appends nothing');
+  assert.equal(exchangeRecords().length, 1, 'a second tool step still appends nothing');
   await s.handlers.get('message_end')({ type: 'message_end', message: {
     role: 'assistant', stopReason: 'stop', timestamp: 1763718001000,
     content: [{ type: 'text', text: 'It printed tool-ok.' }],
     usage: { input: 950, output: 8 } } }, ctx);
   const ex = exchangeRecords();
-  assert.equal(ex.length, 1, 'one journal append for the whole turn, not one per tool step');
-  assert.equal(ex[0].data.id, 1, 'one exchange for the whole turn');
+  assert.equal(ex.length, 2, 'one send-time record plus one final record, never one per tool step');
+  assert.equal(ex[0].data.id, 1, 'both records fold onto one exchange');
+  assert.equal(ex.at(-1).data.id, 1, 'the final record keeps the same id');
   const last = ex.at(-1).data;
   assert.equal(last.status, 'answered');
   assert.equal(last.assistant.text, 'It printed tool-ok.');
@@ -116,13 +128,13 @@ test('S10/F6: a tool-using turn journals exactly one exchange record, its final 
   assert.equal(last.assistant.tokens.output, 25, 'summed over the turn');
   assert.equal(last.assistant.toolCalls, 2);
   await s.handlers.get('agent_settled')({ type: 'agent_settled', aborted: false }, ctx);
-  assert.equal(exchangeRecords().length, 1, 'the settling turn appends nothing more for a resolved exchange');
+  assert.equal(exchangeRecords().length, 2, 'a settled turn adds nothing beyond send + resolution');
   rmSync(dir, { recursive: true, force: true });
 });
 
 // S4: the journaled record keeps the exact contract from README (line
 // envelope + exchange data), so renderers fold the same bytes as before.
-test('S4/F6: a simple exchange journals one line with the unchanged shape and payload', async () => {
+test('S4/F6: an exchange journals its send-time pending line and the unchanged final payload', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'recap-format-'));
   const s = piStub(); const { default: ext } = await import('./index.ts'); ext(s.api);
   const ctx = { ui: { notify() {} }, sessionManager: { getSessionFile: () => join(dir, 's.jsonl'), getSessionId: () => 'sess-format' } };
@@ -132,8 +144,11 @@ test('S4/F6: a simple exchange journals one line with the unchanged shape and pa
     role: 'assistant', stopReason: 'stop', timestamp: 1763718100050,
     content: [{ type: 'text', text: 'chau' }], usage: { input: 10, output: 3 } } }, ctx);
   const recs = readFileSync(join(dir, 's.pi-chat-recap.journal.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.equal(recs.length, 1, 'a simple exchange is one line, exactly like a tool-using turn');
-  const rec = recs[0];
+  assert.equal(recs.length, 2, 'the send-time pending line plus the final record');
+  assert.equal(recs[0].data.status, 'pending', 'the first line is the own message being sent');
+  assert.equal(recs[0].data.user.text, 'hola recap');
+  assert.deepEqual(recs[0].data.assistant, null, 'a pending record carries no assistant yet');
+  const rec = recs[1];
   assert.deepEqual(Object.keys(rec), ['v', 'producer', 'sessionId', 'ts', 'type', 'data']);
   assert.equal(rec.v, 1);
   assert.equal(rec.producer, 'pi-chat-recap');
@@ -155,10 +170,10 @@ test('S4/F6: a simple exchange journals one line with the unchanged shape and pa
   rmSync(dir, { recursive: true, force: true });
 });
 
-// PRESERVE: a turn that settles without a final reply still leaves its
-// exchange in the journal once (previously the message_start pending
-// append); the deferred write moved, the record did not disappear.
-test('F6: a turn that settles with no final reply still journals its exchange once', async () => {
+// PRESERVE: the own message still ends up in the journal exactly once. Since
+// message_start journals the pending form, the settled-turn path adds nothing
+// new: the send-time record and the settled pending state are the same line.
+test('F6: a turn that settles with no final reply depends only on its send-time record', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'recap-settle-'));
   const s = piStub(); const { default: ext } = await import('./index.ts'); ext(s.api);
   const ctx = { ui: { notify() {} }, sessionManager: { getSessionFile: () => join(dir, 's.jsonl'), getSessionId: () => 'sess-settle' } };
@@ -167,7 +182,7 @@ test('F6: a turn that settles with no final reply still journals its exchange on
   await s.handlers.get('agent_settled')({ type: 'agent_settled', aborted: false }, ctx);
   const recs = readFileSync(join(dir, 's.pi-chat-recap.journal.jsonl'), 'utf8').trim().split('\n').map(JSON.parse)
     .filter((r) => r.type === 'exchange');
-  assert.equal(recs.length, 1, 'the settled turn appends its exchange exactly once');
+  assert.equal(recs.length, 1, 'the send-time record is the only one; settle adds no duplicate');
   assert.equal(recs[0].data.status, 'pending');
   assert.equal(recs[0].data.user.text, 'contá hasta tres');
   assert.equal(recs[0].data.user.ts, new Date(1763718200000).toISOString());
@@ -206,7 +221,8 @@ test('F8/S2: resuming a journal with N exchanges appends nothing and seeds state
   await first.handlers.get('message_start')({ type: 'message_start', message: { role: 'user', content: 'cancelá eso', timestamp: 1763718310000 } }, ctx1);
   await first.handlers.get('agent_settled')({ type: 'agent_settled', aborted: true }, ctx1);
   const before = journalRecords(journalFile);
-  assert.equal(before.filter((r) => r.type === 'exchange').length, 2, 'the first run journaled two exchanges');
+  assert.equal(new Set(before.filter((r) => r.type === 'exchange').map((r) => r.data.id)).size, 2, 'the first run journaled two exchanges');
+  assert.equal(before.filter((r) => r.type === 'exchange').length, 4, 'each exchange contributed its send-time pending line');
   await first.handlers.get('session_shutdown')({ type: 'session_shutdown' }, ctx1);
 
   // Resume inside the same process (Pi rebinds session_start on /resume): the
@@ -237,7 +253,8 @@ test('F8/S2: resuming a journal with N exchanges appends nothing and seeds state
   await second.handlers.get('message_end')({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', timestamp: 1763718320100, content: [{ type: 'text', text: 'nueva respuesta' }] } }, ctx2);
   const after = journalRecords(journalFile);
   assert.deepEqual(after.slice(0, before.length), before, 'the restored records are untouched, not rewritten');
-  assert.equal(after.length, before.length + 1, 'exactly one new line for one new exchange');
+  assert.equal(after.length, before.length + 2, 'a send-time pending line plus the final record for the new exchange');
+  assert.equal(after.at(-2).data.status, 'pending', 'the new exchange was journaled at send time');
   const added = after.at(-1).data;
   assert.equal(added.id, 3, 'the resumed session continues above the journal max id');
   assert.equal(added.status, 'answered');
@@ -266,7 +283,7 @@ test('S4/F8: a resumed session journals the same new-activity record as a fresh 
     data: { ...rec.data, id: '<id>', assistant: { ...rec.data.assistant, doneTs: '<doneTs>' } },
   });
 
-  // Control: a fresh session answers once.
+  // Control: a fresh session answers once (pending line + final record).
   const control = piStub(); ext(control.api);
   await startSession(control, ctx);
   await ask(control);
@@ -280,7 +297,7 @@ test('S4/F8: a resumed session journals the same new-activity record as a fresh 
   await ask(resumed);
   const records = journalRecords(journalFile);
   const resumedRec = records.at(-1);
-  assert.equal(records.length, 2, 'the resume added exactly the new exchange line and nothing else');
+  assert.equal(records.length, 4, 'the resume added exactly the new send-time and final lines and nothing else');
   assert.equal(resumedRec.data.id, 2);
   assert.deepEqual(strip(resumedRec), strip(controlRec),
     'the new-activity record is identical to the never-resumed one');
@@ -403,8 +420,8 @@ test('T3: agent_settled survives a stale sibling module without lastExchange', a
     await answeredRun.handlers.get('message_end')({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', timestamp: 1763718610050, content: 'Muestra estado' } }, answeredCtx);
     await answeredRun.handlers.get('agent_settled')({ type: 'agent_settled', aborted: false }, answeredCtx);
     const answeredRecords = journalRecords(join(dir, 'answered.pi-chat-recap.journal.jsonl'));
-    assert.equal(answeredRecords.filter((r) => r.type === 'exchange').length, 1,
-      'settling adds nothing for the already journaled exchange');
+    assert.equal(answeredRecords.filter((r) => r.type === 'exchange').length, 2,
+      'send-time plus final lines only; settling adds nothing for the already journaled exchange');
     assert.equal(answeredRecords.filter((r) => r.type === 'summary').length, 0, 'the stubbed model produced no summary');
     const warnings = answeredRecords.filter((r) => r.type === 'recap_warning').map((r) => r.data.message);
     assert.equal(warnings.length, 1, 'the answered lookup found the exchange and reached summarization');
