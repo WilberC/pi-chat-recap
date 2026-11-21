@@ -11,7 +11,13 @@ the data and own all presentation.
 
 ## Install
 
-From the parent directory of a local clone (no npm publication needed):
+From the npm registry:
+
+```bash
+pi install npm:pi-chat-recap
+```
+
+Or from the parent directory of a local clone:
 
 ```bash
 pi install ./pi-chat-recap
