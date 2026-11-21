@@ -5,18 +5,38 @@ import {
   assistantText,
   EXCHANGE_STATUS,
 } from './lib/exchange.mjs';
-import { createJournal, maxExchangeIdIn } from './lib/journal.mjs';
+import { createJournal, parseJournal } from './lib/journal.mjs';
 import { createSummarizer, loadPromptFile } from './lib/summary.mjs';
 import { loadRecapConfig, recapPaths } from './lib/config.mjs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+
+// T3 (hardening): a live Pi session can reload this file while Node's ESM
+// module cache still serves the OLD lib/exchange.mjs, so the log has no
+// lastExchange method and agent_settled threw "log.lastExchange is not a
+// function" from inside ExtensionRunner.emit. A stale sibling only lacks the
+// targeted lookup; exchanges() and its clone contract are unchanged, so the
+// whole-list scan is a faithful stand-in (same record, same null, same copy).
+// Remove once reloads always pick up fresh sibling modules.
+export const lastExchangeCompat = (log: any, predicate?: (exchange: any) => boolean) => {
+  if (typeof log.lastExchange === 'function') return log.lastExchange(predicate);
+  const test = typeof predicate === 'function' ? predicate : () => true;
+  return log.exchanges().filter((exchange) => test(exchange)).at(-1) ?? null;
+};
 
 // pi-chat-recap: producer-only conversation data. It records what happened
 // (user text, assistant text, cancellations, session language) and renders
 // nothing. Renderers such as herdr-sidecar consume the data; they never
 // re-derive exchange semantics.
 export default function chatRecap(pi: ExtensionAPI) {
-  const log = createExchangeLog();
+  // F8: one log per session. session_start rebuilds it from the bound
+  // journal, so a /resume or a session switch never inherits the previous
+  // session's exchanges, ids or language.
+  let log = createExchangeLog();
+  // Ids that came from the journal (F8): they are already durable, so the
+  // writer below must never append them a second time.
+  let restoredIds = new Set();
   const journal = createJournal({ sessionId: '', producer: 'pi-chat-recap' });
 
   // Config and prompt live in editable files (R4/S4); they are re-read per
@@ -77,10 +97,68 @@ export default function chatRecap(pi: ExtensionAPI) {
   // lost from the journal. That is acceptable for this feature — it is a
   // recap journal, not a source of truth.
   const publish = (exchange) => {
-    if (exchange) journal.append('exchange', exchange);
+    // F8: a record restored from the journal is its source of truth; writing
+    // it again would duplicate history the renderer already folded (it keeps
+    // the last record per id, so it tolerated the old replay, but that replay
+    // cost one synchronous append per exchange on every resume).
+    if (!exchange || restoredIds.has(exchange.id)) return;
+    journal.append('exchange', exchange);
   };
   const resolved = (exchange) =>
     exchange != null && exchange.status !== EXCHANGE_STATUS.pending;
+
+  // The journal's records, parsed once. parseJournal keeps lib/journal.mjs's
+  // line contract and torn-line tolerance; a missing or unreadable file is a
+  // fresh session, never an error (same policy as maxExchangeIdIn, which
+  // would parse the same file a second time — the startup cost F8 targets).
+  const readJournalRecords = (file: string | null) => {
+    if (!file) return [];
+    try {
+      return parseJournal(readFileSync(file, 'utf8'));
+    } catch {
+      return [];
+    }
+  };
+
+  // F8/S3: rebuild the in-memory log from the journal's records without
+  // touching the journal. The log accepts entries only through its own
+  // transitions, so each record is replayed through beginUser/setAssistant/
+  // abort, which are pure in-memory; publish, the only writer, is not
+  // involved. That restores the next id, the status counts and the language
+  // the conversation was fixed to, so a resumed session behaves like one
+  // that never reloaded. Returns the ids the log now holds.
+  const seedFromJournal = (target, records: any[]) => {
+    const folded = new Map();
+    for (const record of records as any[]) {
+      if (record?.type !== 'exchange') continue;
+      const id = Number(record?.data?.id);
+      // Consumers fold last-record-per-id; the same fold keeps an exchange
+      // re-recorded later (e.g. an abort after an empty answered record)
+      // single here.
+      if (Number.isFinite(id)) folded.set(id, record.data);
+    }
+    const restored = new Set();
+    let maxId = 0;
+    for (const id of [...folded.keys()].sort((a, b) => a - b)) {
+      const data: any = folded.get(id);
+      if (id > maxId) maxId = id;
+      const exchange = target.beginUser(data?.user?.text ?? '', data?.user?.ts ?? undefined);
+      if (data?.status === EXCHANGE_STATUS.answered) {
+        target.setAssistant(data?.assistant?.text ?? '', data?.assistant?.ts ?? undefined, {
+          doneTs: data?.assistant?.doneTs ?? undefined,
+          usage: data?.assistant?.tokens ?? undefined,
+          toolCalls: data?.assistant?.toolCalls,
+        });
+      } else if (data?.status === EXCHANGE_STATUS.aborted) {
+        target.abort(data?.assistant?.ts ?? undefined);
+      }
+      if (exchange) restored.add(exchange.id);
+    }
+    // S3 (per-session resume): ids continue above the recorded maximum,
+    // including a journal with gaps left by a failed write.
+    target.seedNextId(maxId);
+    return restored;
+  };
 
   pi.on('session_start', async (_event, ctx) => {
     ctxRef = ctx;
@@ -89,18 +167,18 @@ export default function chatRecap(pi: ExtensionAPI) {
       ctx.sessionManager?.getSessionFile?.(),
       ctx.sessionManager?.getSessionId?.(),
     );
-    // S3 (per-session resume): Pi resume or an extension reload rebinds to
-    // a session file whose journal already holds exchanges with ids 1..N.
-    // Continue above N so a new id never collides with a recorded one.
-    log.seedNextId(maxExchangeIdIn(bound));
+    // F8 (latency): the journal already holds this session's exchanges, so
+    // session_start loads them instead of replaying them back into it. The
+    // old replay wrote every exchange again — one synchronous append per
+    // exchange, O(conversation) inside Pi's process on every resume/reload.
+    log = createExchangeLog();
+    restoredIds = seedFromJournal(log, readJournalRecords(bound));
     // Surface config/prompt problems once at startup, not per exchange.
     const { warnings } = loadRecapConfig(join(homedir(), '.pi', 'agent'));
     for (const w of warnings) warnOnce(w);
     configWarned = warnings.length > 0;
     const { warnings: promptWarnings } = loadPromptFile(paths.prompt);
     for (const w of promptWarnings) warnOnce(w);
-    // Replay existing exchanges so a renderer joining late has full state.
-    for (const exchange of log.exchanges()) publish(exchange);
   });
   pi.on('session_shutdown', () => journal.close());
 
@@ -165,17 +243,25 @@ export default function chatRecap(pi: ExtensionAPI) {
   let summarizedIds = new Set();
   pi.on('agent_settled', async (event) => {
     if ((event as { aborted?: boolean }).aborted) {
+      // F8: an abort with no exchange of this run must not reopen and mutate a
+      // record restored from the journal; it was already recorded there.
+      // These two lookups mirror abort()'s own selection in lib/exchange.mjs.
+      const target = log.pending()
+        ?? lastExchangeCompat(log, (e) => e.status === EXCHANGE_STATUS.answered && e.assistant?.text === '');
+      if (target && restoredIds.has(target.id)) return;
       publish(log.abort(tsOf(event)));
       return;
     }
     // F6: a turn that settles without a final reply still leaves its exchange
     // in the journal — one append, never one per tool step.
-    const open = log.lastExchange();
+    const open = lastExchangeCompat(log);
     if (open?.status === EXCHANGE_STATUS.pending) publish(open);
     // F7: targeted lookup — agent_settled needs one record, not a deep clone
     // of the whole conversation on every settled turn.
-    const exchange = log.lastExchange((e) => e.status === EXCHANGE_STATUS.answered);
-    if (!exchange || summarizedIds.has(exchange.id)) return;
+    const exchange = lastExchangeCompat(log, (e) => e.status === EXCHANGE_STATUS.answered);
+    // F8: a restored exchange's turn already settled in a previous run, so
+    // summarizing it here would be a model call the user never triggered.
+    if (!exchange || restoredIds.has(exchange.id) || summarizedIds.has(exchange.id)) return;
     const { config } = loadRecapConfig(join(homedir(), '.pi', 'agent'));
     if (config.mode === 'off') return;
     if (!config.model && !config.fallbackModels.length) {
