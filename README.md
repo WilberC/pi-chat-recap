@@ -44,9 +44,12 @@ pi -e ./pi-chat-recap/index.ts
 
 ## Journal (for renderers)
 
-The extension appends an append-only JSONL journal next to the Pi session
-file: `pi-chat-recap.journal.jsonl`. Each line is self-sufficient so
-consumers can rebuild state by tailing:
+The extension appends an append-only JSONL journal PER SESSION, next to the
+session file: `<session-file>.pi-chat-recap.journal.jsonl` (the session
+file's stem + the producer name). Each session owns its journal, so two
+sessions in the same directory never share history and a resumed session
+continues its exchange ids above the ones already recorded. Each line is
+self-sufficient so consumers can rebuild state by tailing:
 
 ```json
 {"v":1,"producer":"pi-chat-recap","sessionId":"…","ts":"…","type":"exchange","data":{"id":1,"status":"aborted","user":{"text":"…","ts":"…","cancelled":true},"assistant":{"text":null,"ts":"…","marker":"No response (operation aborted)"}}}
