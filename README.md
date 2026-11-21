@@ -4,7 +4,8 @@ Producer-only chat recap data for [Pi](https://pi.dev) and
 [Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell).
 
 The extension records what happened in the conversation — user text, assistant
-text, cancelled exchanges, session language, per-exchange model summaries — and
+text, cancelled exchanges, session language, and per-exchange model summaries
+(optional; off by default) — and
 renders nothing. Renderers (for example the herdr-sidecar recap view) consume
 the data and own all presentation.
 
@@ -81,8 +82,8 @@ reinstalling (invalid values are warned, with defaults taking over).
 
 ```json
 {
-  "mode": "model",            // "model" (default) or "off"
-  "model": "provider/model",  // summary model; null disables summarization (warns)
+  "mode": "off",              // "off" (default) or "model" — model mode is an opt-in
+  "model": "provider/model",  // summary model; null disables summarization (warns in model mode)
   "fallbackModels": [],       // tried in order when the primary fails
   "maxOutputTokens": 512,     // requested output cap per summary call
   "maxContextChars": 4000,    // material bytes sent to the model
@@ -90,9 +91,21 @@ reinstalling (invalid values are warned, with defaults taking over).
 }
 ```
 
+With the default `"mode": "off"` the producer journals exchanges exactly as
+before (verbatim text, markers, timestamps) but makes **no model call** and
+writes **no `summary` and no `recap_warning` records** — model mode is fully
+silent unless you opt in. To enable it, set `"mode": "model"` (invalid or
+missing `mode` values fall back to `"off"`, with a warning only when the value
+is invalid).
+
 `maxOutputTokens` is what is requested from the provider — actual usage
 depends on the provider and is reported per summary in the journal's
-`tokens` field. `maxContextChars` (model input) and `maxDisplayChars`
+`tokens` field. On endpoints where reasoning and the answer share that budget
+(reasoning models behind OpenAI-compatible APIs), a summary whose budget is
+consumed by thinking comes back empty (`stopReason: "length"`, no text block);
+in that case the producer retries the same model once with a larger budget
+(4× `maxOutputTokens`), and the journal records the provider-reported usage of
+the call that produced the text. `maxContextChars` (model input) and `maxDisplayChars`
 (journal text) are distinct limits.
 
 `pi-chat-recap.prompt.md` — the summary prompt template. Placeholders:

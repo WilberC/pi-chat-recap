@@ -47,7 +47,7 @@ export default function chatRecap(pi: ExtensionAPI) {
           : Array.isArray(content)
             ? content.filter((b) => (b as { type?: string })?.type === 'text').map((b) => (b as { text?: string }).text ?? '').join('\n')
             : '';
-        return { text, tokens: result?.usage ?? null };
+        return { text, tokens: result?.usage ?? null, stopReason: result?.stopReason ?? null };
       },
       config,
       loadPrompt: () => prompt,
