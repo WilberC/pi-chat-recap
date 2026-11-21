@@ -38,17 +38,17 @@ pi install npm:pi-chat-recap
 
 Then `/reload` inside the session, and `/chat-recap` prints exchange counts,
 the detected language and the effective summary mode. Local clones and one-shot
-tests: [docs/development.md](docs/development.md).
+tests: [docs/development.md](https://github.com/WilberC/pi-chat-recap/blob/main/docs/development.md).
 
 ## Documentation
 
 | I want to… | Read |
 | --- | --- |
-| Turn on model summaries, or change their prompt | [docs/configuration.md](docs/configuration.md) |
-| Read the journal from a renderer | [docs/journal.md](docs/journal.md) |
-| Know who owns what between producer and renderer | [docs/design.md](docs/design.md) |
-| Run the tests or install from a clone | [docs/development.md](docs/development.md) |
+| Turn on model summaries, or change their prompt | [docs/configuration.md](https://github.com/WilberC/pi-chat-recap/blob/main/docs/configuration.md) |
+| Read the journal from a renderer | [docs/journal.md](https://github.com/WilberC/pi-chat-recap/blob/main/docs/journal.md) |
+| Know who owns what between producer and renderer | [docs/design.md](https://github.com/WilberC/pi-chat-recap/blob/main/docs/design.md) |
+| Run the tests or install from a clone | [docs/development.md](https://github.com/WilberC/pi-chat-recap/blob/main/docs/development.md) |
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/WilberC/pi-chat-recap/blob/main/LICENSE).
