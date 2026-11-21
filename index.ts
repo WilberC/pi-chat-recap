@@ -68,11 +68,19 @@ export default function chatRecap(pi: ExtensionAPI) {
     uiRef?.ui?.notify?.(`pi-chat-recap: ${msg}`, 'warning');
   };
 
-  // Append the full exchange record after every transition so consumers can
-  // rebuild state by tailing; each line is self-sufficient.
+  // F6 (latency): journal an exchange once, when it resolves (answered or
+  // aborted) or when its turn settles without a final reply. Each assistant
+  // message_end used to sync-append the full exchange text, so a tool-loop
+  // turn re-appended the whole record once per tool step; the pending state
+  // now lives in memory only and the journal gets the final form once.
+  // Crash-safety tradeoff: if Pi dies mid-turn, the pending exchange text is
+  // lost from the journal. That is acceptable for this feature — it is a
+  // recap journal, not a source of truth.
   const publish = (exchange) => {
     if (exchange) journal.append('exchange', exchange);
   };
+  const resolved = (exchange) =>
+    exchange != null && exchange.status !== EXCHANGE_STATUS.pending;
 
   pi.on('session_start', async (_event, ctx) => {
     ctxRef = ctx;
@@ -112,7 +120,9 @@ export default function chatRecap(pi: ExtensionAPI) {
     // user-role model messages; they are not things the human typed, so they
     // never begin an exchange.
     if ((message as { customType?: string }).customType) return;
-    publish(log.beginUser(userText(message as { content: unknown }), tsOf(message)));
+    // F6: the pending transition stays in memory; journaling it would mean
+    // re-appending the full exchange text on every tool step of the turn.
+    log.beginUser(userText(message as { content: unknown }), tsOf(message));
   });
 
   pi.on('message_end', async (event) => {
@@ -139,7 +149,9 @@ export default function chatRecap(pi: ExtensionAPI) {
       // the moment the answer was complete (S10 doneTs).
       doneTs: new Date().toISOString(),
     });
-    publish(exchange);
+    // F6: only a resolved transition is journaled; 'toolUse' steps return the
+    // still-pending exchange and must not re-append the record.
+    if (resolved(exchange)) publish(exchange);
 
     // R2/R4: summarization happens in agent_settled (end of turn), not here:
     // message_end can fire mid tool-loop and must never stall the loop.
@@ -156,10 +168,13 @@ export default function chatRecap(pi: ExtensionAPI) {
       publish(log.abort(tsOf(event)));
       return;
     }
-    const exchange = log
-      .exchanges()
-      .filter((e) => e.status === EXCHANGE_STATUS.answered)
-      .at(-1);
+    // F6: a turn that settles without a final reply still leaves its exchange
+    // in the journal — one append, never one per tool step.
+    const open = log.lastExchange();
+    if (open?.status === EXCHANGE_STATUS.pending) publish(open);
+    // F7: targeted lookup — agent_settled needs one record, not a deep clone
+    // of the whole conversation on every settled turn.
+    const exchange = log.lastExchange((e) => e.status === EXCHANGE_STATUS.answered);
     if (!exchange || summarizedIds.has(exchange.id)) return;
     const { config } = loadRecapConfig(join(homedir(), '.pi', 'agent'));
     if (config.mode === 'off') return;

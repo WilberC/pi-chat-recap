@@ -61,10 +61,12 @@ data is absent — never reconstruct conversation semantics.
 
 Record types:
 
-- `exchange` — full exchange state after every transition (pending /
-  answered / aborted). Aborted exchanges carry fixed markers and never get
-  summarized. A turn that calls tools stays `pending` through its tool steps
-  and answers with the final reply. An answered `assistant` carries:
+- `exchange` — the exchange's resolved state, written once when the exchange
+  resolves (answered / aborted) or when the turn settles without a final
+  reply (then it lands as `pending`). Aborted exchanges carry fixed markers
+  and never get
+  summarized. A turn that calls tools journals only its final form — no
+  separate record per tool step. An answered `assistant` carries:
   - `text` — the turn's final reply, verbatim.
   - `ts` — when the final reply message started.
   - `doneTs` — when the final reply finished. Response time is
