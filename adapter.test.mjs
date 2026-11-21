@@ -34,7 +34,7 @@ test('records exchange, abort and language from real event shapes (1a,1b)', asyn
   await s.handlers.get('agent_settled')({ type: 'agent_settled', aborted: true }, ctx);
   await s.handlers.get('agent_settled')({ type: 'agent_settled', aborted: false }, ctx);
   await s.commands.get('chat-recap').handler('', ctx);
-  const recs = readFileSync(join(dir, 'pi-chat-recap.journal.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  const recs = readFileSync(join(dir, 'session.pi-chat-recap.journal.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   const last = (id) => recs.filter((r) => r.data.id === id).at(-1).data;
   assert.equal(last(1).status, 'answered');
   assert.equal(last(1).assistant.text, 'Muestra estado');
@@ -52,7 +52,7 @@ test('message timestamps come from message.timestamp, not event.timestamp', asyn
   const ctx = { ui: { notify() {} }, sessionManager: { getSessionFile: () => join(dir, 's.jsonl') } };
   await s.handlers.get('session_start')({ type: 'session_start', reason: 'startup' }, ctx);
   await s.handlers.get('message_start')({ type: 'message_start', message: { role: 'user', content: 'hi', timestamp: 1763000000000 } }, ctx);
-  const rec = JSON.parse(readFileSync(join(dir, 'pi-chat-recap.journal.jsonl'), 'utf8').trim());
+  const rec = JSON.parse(readFileSync(join(dir, 's.pi-chat-recap.journal.jsonl'), 'utf8').trim());
   assert.equal(rec.data.user.ts, new Date(1763000000000).toISOString());
   rmSync(dir, { recursive: true, force: true });
 });
@@ -63,7 +63,7 @@ test('extension-authored messages never begin an exchange (advisory 3)', async (
   const ctx = { ui: { notify() {} }, sessionManager: { getSessionFile: () => join(dir, 's.jsonl') } };
   await s.handlers.get('session_start')({ type: 'session_start', reason: 'startup' }, ctx);
   await s.handlers.get('message_start')({ type: 'message_start', message: { role: 'user', customType: 'review-reminder', content: 'extension instruction' } }, ctx);
-  assert.equal(existsSync(join(dir, 'pi-chat-recap.journal.jsonl')), false, 'no exchange record for extension-authored messages');
+  assert.equal(existsSync(join(dir, 's.pi-chat-recap.journal.jsonl')), false, 'no exchange record for extension-authored messages');
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -83,7 +83,7 @@ test('S10: a tool-using turn journals the final reply with doneTs, tokens and to
     role: 'assistant', stopReason: 'stop', timestamp: 1763718001000,
     content: [{ type: 'text', text: 'It printed tool-ok.' }],
     usage: { input: 950, output: 8 } } }, ctx);
-  const recs = readFileSync(join(dir, 'pi-chat-recap.journal.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  const recs = readFileSync(join(dir, 's.pi-chat-recap.journal.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   const ex = recs.filter((r) => r.type === 'exchange');
   assert.ok(ex.every((r) => r.data.id === 1), 'one exchange for the whole turn');
   assert.ok(ex.slice(0, -1).every((r) => r.data.status === 'pending'), 'tool steps stay pending');

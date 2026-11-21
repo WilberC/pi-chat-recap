@@ -5,7 +5,7 @@ import {
   assistantText,
   EXCHANGE_STATUS,
 } from './lib/exchange.mjs';
-import { createJournal } from './lib/journal.mjs';
+import { createJournal, maxExchangeIdIn } from './lib/journal.mjs';
 import { createSummarizer, loadPromptFile } from './lib/summary.mjs';
 import { loadRecapConfig, recapPaths } from './lib/config.mjs';
 import { join } from 'node:path';
@@ -77,10 +77,14 @@ export default function chatRecap(pi: ExtensionAPI) {
   pi.on('session_start', async (_event, ctx) => {
     ctxRef = ctx;
     uiRef = ctx;
-    journal.openSession(
+    const bound = journal.openSession(
       ctx.sessionManager?.getSessionFile?.(),
       ctx.sessionManager?.getSessionId?.(),
     );
+    // S3 (per-session resume): Pi resume or an extension reload rebinds to
+    // a session file whose journal already holds exchanges with ids 1..N.
+    // Continue above N so a new id never collides with a recorded one.
+    log.seedNextId(maxExchangeIdIn(bound));
     // Surface config/prompt problems once at startup, not per exchange.
     const { warnings } = loadRecapConfig(join(homedir(), '.pi', 'agent'));
     for (const w of warnings) warnOnce(w);
